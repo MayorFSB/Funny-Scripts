@@ -1,14 +1,10 @@
-import sqlite3
+import sqlite3, requests, re, time
 from datetime import datetime
-import requests
 from bs4 import BeautifulSoup as bsf4
-import re
-import config
 from PyQt5.QtWidgets import QApplication, QMainWindow, QTableWidget, QTableWidgetItem, QWidget, QVBoxLayout, QLabel, \
     QLineEdit, QPushButton, QAbstractItemView
-from win10toast import ToastNotifier
-import time
-import webbrowser
+import config
+from functions import notification, open_in_browser
 
 
 class DatabaseApp(QMainWindow):
@@ -30,10 +26,6 @@ class DatabaseApp(QMainWindow):
         self.col_names = [self.cols[x][1] for x in range(len(self.cols))]
         print(f'ссылки {self.links}')
         print(f"колонки {self.cols}")
-        # self.table.setRowCount(len(self.links))
-        # self.table.setColumnCount(len(self.cols))
-        # self.RowCount_ = len(self.links)
-        # self.ColCount_ = len(self.cols)
 
         # Построчно отрисовываем таблицу получая данные из базы
         self.update_table()
@@ -86,7 +78,6 @@ class DatabaseApp(QMainWindow):
         self.col_names = [self.cols[x][1] for x in range(len(self.cols))]
         print(f'Имена колонок {self.col_names}')
         self.table.setHorizontalHeaderLabels(self.col_names)
-
         try:
             for row, i in enumerate(self.links):
                 db_string = self.data.execute(f'SELECT * FROM {self.name_db} WHERE link = ?', (i[0],)).fetchall()[0]
@@ -116,7 +107,6 @@ class DatabaseApp(QMainWindow):
             self.connection.commit()
             self.links = self.data.execute(f'SELECT link FROM {self.name_db}').fetchall()
             self.cols = self.data.execute(f'PRAGMA table_info({self.name_db})').fetchall()
-            self.update_table()
             self.parsed_l(link)
         else:
             print('Такой товар уже есть в базе')
@@ -161,7 +151,7 @@ class DatabaseApp(QMainWindow):
     # функция получения цены о товаре с обновлением значения в базе
     def parsed_l(self, link):
         true_data = self.get_new_conumn()
-        # price = -1
+        price = '-1,'
         url = f'https://ozon.by/product/{link}/'
         time.sleep(1)
         responce = requests.get(url)
@@ -177,11 +167,11 @@ class DatabaseApp(QMainWindow):
                 price = ozon_card_no
                 print(price, 'no card')
             else:
-                price = -1
+                price = '-1,'
                 print("Не продается или продукт недоступен")
         except requests.exceptions.RequestException as e:
             print(print(f"Ошибка при выполнении запроса: {e}"))
-            price = -1
+            price = '-1,'
         except Exception as e:
             print(e)
             phrase = r'(\d{1,4}(?:,\d{1,})*(?:\.\d{1,})?)\s*BYN'
@@ -190,10 +180,10 @@ class DatabaseApp(QMainWindow):
                 price = f'same {find_ph[0]}'
                 print(f"Такой товар сейчас не продается, цена аналогичного: {find_ph[0]}")
             else:
-                price = -1
+                price = '-1,'
         self.data.execute(f'UPDATE {self.name_db} SET {true_data} = ? WHERE link = ?', (price, link))
         self.connection.commit()
-        self.update_table()
+        # self.update_table()
         print(f'PARSED  URL: {url}, DATA: {true_data}')
 
     # функция обновления всех данных на текущий день
@@ -216,7 +206,6 @@ class DatabaseApp(QMainWindow):
             self.table.takeItem(row, col)
             self.connection.execute(F'DELETE FROM {self.name_db} WHERE link = ?', (item.text(),))
             self.connection.commit()
-            # self.RowCount_ = self.RowCount_ - 1
         print('удаление работает')
         self.links = self.data.execute(f'SELECT link FROM {self.name_db}').fetchall()
         self.update_table()
@@ -238,35 +227,21 @@ class DatabaseApp(QMainWindow):
                     self.data.execute(sql_query, (new_value, self.links[row][0]))
                     self.connection.commit()
 
-    # функция для отображения уведомления в случае снижения цены
+    # функция для отображения уведомления в случае снижения цены в сравнении с предыдущим днем
     def less_price(self, string):
         if len(self.col_names) >= 3:
             try:
+                print('LESS PRICE', string)
                 a = float(re.findall(pattern=r'\d{0,4},\d{2}', string=string[-1])[0].replace(',', '.'))
                 b = float(re.findall(pattern=r'\d{0,4},\d{2}', string=string[-2])[0].replace(',', '.'))
                 if a < b:
                     print(f'Сегодня {a}. Вчера {b}')
                     if config.available_notifications is True:
-                        self.notification(string, a, b)
+                        notification(string, a, b)
                     if config.open_in_browser is True:
-                        self.open_in_browser(string)
+                        open_in_browser(string)
             except Exception as e:
                 print('NOTIFICATION ERROR', e)
-
-    def notification(self, string, a, b):
-        toaster = ToastNotifier()
-        toaster.show_toast(title=f"Сегодня у товара минимальная цена",
-                           msg=f"Сегодня можно выгодно купить {string[0]}. Дешевле чем вчера на {b - a} BYN",
-                           icon_path=None,
-                           duration=5,
-                           threaded=True, )
-        while toaster.notification_active():
-            time.sleep(0.1)
-
-    def open_in_browser(self, db_string):
-        chrome_browser = webbrowser.get('chrome')
-        print(f'ПРОДУКТ {db_string[0]} СТАЛ ДЕШЕВЛЕ')
-        chrome_browser.open(f'https://ozon.by/product/{db_string[0]}/')
 
 
 if __name__ == '__main__':
